@@ -1,0 +1,9 @@
+Animation: idle loop, busy loop and reduced-motion mode OK
+75%: geometry, pet and click target OK
+100%: geometry, pet and click target OK
+125%: geometry, pet and click target OK
+150%: geometry, pet and click target OK
+175%: geometry, pet and click target OK
+200%: geometry, pet and click target OK
+Ctrl+wheel: 75% -> 100% OK
+Zoom persistence: 125% OK
