@@ -2,7 +2,7 @@
 
 **Windows 桌面悬浮监测宠物，查看 Codex 每轮响应、token 用量、输出速度和缓存命中率。**它直接读取 Codex 本地会话日志，不接管网络、不注入客户端，也不会额外发起模型请求。
 
-![Codex Pulse 展开面板](preview.png)
+![Codex Pulse 展开面板，显示单次与会话缓存命中率](screenshots/cache-hit-overview.png)
 
 ## 界面预览
 
