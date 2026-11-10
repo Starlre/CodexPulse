@@ -181,6 +181,8 @@ class Session:
         cache_measured = [v for v in complete if v.input_tokens is not None and
                           v.cached_input_tokens is not None and v.input_tokens > 0]
         total_input = sum(v.input_tokens for v in cache_measured)
+        usage_recorded = [v for v in self.turns if v.input_tokens is not None or v.output_tokens is not None]
+        total_usage_tokens = sum((v.input_tokens or 0) + (v.output_tokens or 0) for v in usage_recorded)
         return {
             'completed': len(complete),
             'cache_hit_rate': (sum(v.cached_input_tokens for v in cache_measured) / total_input
@@ -191,6 +193,7 @@ class Session:
             'avg_ttft': sum(first) / len(first) if first else None,
             'avg_rate': sum(v.output_tokens for v in measured) / total_seconds if total_seconds else None,
             'tokens': sum(v.output_tokens for v in measured),
+            'total_usage_tokens': total_usage_tokens if usage_recorded else None,
         }
 
     def snapshot(self):

@@ -44,6 +44,7 @@ class MetricsTests(unittest.TestCase):
         self.start()
         self.s.consume({'type':'token_usage_record','payload':{
             'turn_id':'a','turn_token_usage':{'output_tokens':20,'input_tokens':100,'cached_input_tokens':40}}})
+        self.assertEqual(self.s.summary()['total_usage_tokens'], 120)
         self.finish()
         self.assertAlmostEqual(self.s.turns[0].cache_hit_rate, 0.4)
         self.start('b',10)
@@ -52,6 +53,7 @@ class MetricsTests(unittest.TestCase):
         self.finish('b',20)
         self.assertAlmostEqual(self.s.summary()['cache_hit_rate'], 0.7)
         self.assertEqual(self.s.summary()['cache_input_tokens'], 400)
+        self.assertEqual(self.s.summary()['total_usage_tokens'], 450)
 
     def test_cache_rate_unknown_when_log_lacks_cache_fields(self):
         self.start()

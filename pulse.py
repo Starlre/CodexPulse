@@ -122,6 +122,11 @@ class Pulse:
         self.history = None
         self.history_signature = None
         self.status_note = ''
+        self.tray = None
+        self.tray_actions = queue.Queue()
+        self.hidden_to_tray = False
+        self.closing = False
+        self.history_hidden_to_tray = False
         self.drag = None
         self.frame = 0
         self.canvas = ZoomCanvas(self.root, width=364, height=510, bg=KEY, highlightthickness=0)
@@ -135,6 +140,7 @@ class Pulse:
         self.pet_frames = {}
         self.pet_image = self.photo
         self.menu = tk.Menu(self.root, tearoff=False)
+        self.menu.add_command(label='最小化到系统托盘  Ctrl+M', command=self.minimize_to_tray)
         self.menu.add_command(label='展开 / 收起', command=self.toggle)
         self.menu.add_command(label='会话与历史记录…', command=self.show_history)
         self.menu.add_command(label='导出当前会话 CSV…', command=self.export)
@@ -160,6 +166,7 @@ class Pulse:
         self.canvas.bind('<ButtonRelease-1>', self.release)
         self.canvas.bind('<Button-3>', lambda e: self.menu.tk_popup(e.x_root, e.y_root))
         self.root.bind('<Escape>', lambda e: self.toggle())
+        self.root.bind('<Control-m>', lambda e: self.minimize_to_tray())
         self.root.bind('<Control-h>', lambda e: self.show_history())
         self.root.bind('<Control-e>', lambda e: self.export())
         self.canvas.bind('<Control-MouseWheel>', self.zoom_wheel)
@@ -174,10 +181,84 @@ class Pulse:
         y = min(max(0, self.settings.get('y', 90)), self.root.winfo_screenheight()-height)
         self.root.geometry(f'+{x}+{y}')
         threading.Thread(target=monitor, args=(args.home, self.messages, self.stop, self.commands), daemon=True).start()
+        self.start_tray()
+        self.poll_tray_actions()
         self.tick()
         self.animate_pet()
         if args.smoke_test:
             self.root.after(3500, self.smoke_capture)
+
+    def start_tray(self):
+        """Tray callbacks only enqueue commands; Tk stays on its main thread."""
+        try:
+            import pystray
+            from PIL import Image
+            with Image.open(RESOURCES / 'assets' / 'pet.ico') as image:
+                icon_image = image.convert('RGBA')
+            def action(name):
+                return lambda icon, item: self.tray_actions.put(name)
+            self.tray = pystray.Icon(
+                'CodexPulse', icon_image, 'Codex Pulse · 响应监测',
+                pystray.Menu(
+                    pystray.MenuItem('显示悬浮窗', action('restore'), default=True),
+                    pystray.MenuItem('最小化到托盘', action('minimize')),
+                    pystray.MenuItem('会话与历史记录', action('history')),
+                    pystray.Menu.SEPARATOR,
+                    pystray.MenuItem('退出', action('quit'))))
+            self.tray.run_detached()
+        except Exception as exc:
+            if self.tray is not None:
+                self.tray.stop()
+            self.tray = None
+            self.status_note = f'系统托盘不可用：{exc}'
+
+    def poll_tray_actions(self):
+        if self.closing:
+            return
+        while True:
+            try:
+                action = self.tray_actions.get_nowait()
+            except queue.Empty:
+                break
+            if action == 'quit':
+                self.close()
+                return
+            if action == 'restore':
+                self.restore_from_tray()
+            elif action == 'minimize':
+                self.minimize_to_tray()
+            elif action == 'history':
+                self.restore_from_tray()
+                self.show_history()
+        self.root.after(100, self.poll_tray_actions)
+
+    def minimize_to_tray(self):
+        if self.closing or self.hidden_to_tray:
+            return
+        # Keep a recovery route: never hide unless the native tray icon exists.
+        if self.tray is None or not self.tray.visible:
+            messagebox.showwarning('系统托盘', '托盘图标尚未就绪，悬浮窗保持显示。请稍后重试。', parent=self.root)
+            return
+        self.save_settings()
+        self.history_hidden_to_tray = bool(self.history and self.history.winfo_exists()
+                                           and self.history.state() != 'withdrawn')
+        if self.history_hidden_to_tray:
+            self.history.withdraw()
+        self.root.withdraw()
+        self.hidden_to_tray = True
+
+    def restore_from_tray(self):
+        if self.closing:
+            return
+        self.root.deiconify()
+        self.root.attributes('-topmost', self.pinned.get())
+        self.root.lift()
+        self.hidden_to_tray = False
+        if self.history_hidden_to_tray and self.history and self.history.winfo_exists():
+            self.history.deiconify()
+            self.history.lift()
+        self.history_hidden_to_tray = False
+        self.draw()
 
     def load_pet_frames(self):
         sheet = tk.PhotoImage(file=str(RESOURCES / 'assets' / 'pet-frames.png'))
@@ -200,6 +281,9 @@ class Pulse:
         return frames[int(max(0, elapsed)*20) % len(frames)]
 
     def animate_pet(self):
+        if self.hidden_to_tray:
+            self.root.after(500, self.animate_pet)
+            return
         # Only repaint the sprite at 20 fps; statistics retain their 500ms cadence.
         image = self.pet_frame()
         if self.pet_item is not None and image is not self.pet_image:
@@ -305,7 +389,8 @@ class Pulse:
         self.pet_item = c.create_image(72,77,image=self.pet_image)
         self.text(142,97,'CODEX PULSE',13,bold=True,max_width=192,max_height=27)
         self.text(142,126,'你的桌面响应监测伙伴',9,MUTED,max_width=192,max_height=21)
-        self.text(326,76,'−',16,MUTED,anchor='center')
+        self.text(290,76,'−',16,MUTED,anchor='center')
+        self.text(326,76,'⌄',16,MUTED,anchor='center')
         self.text(34,174,'本次请求',11,bold=True,max_width=184,max_height=26)
         state = '进行中 · 已用时' if live else ('已中断' if turn and turn.status=='interrupted' else '已完成' if turn else '等待会话')
         self.roundrect(238,170,330,196,TILE,9)
@@ -327,7 +412,10 @@ class Pulse:
         self.text(325,300,f'输出 {count} tokens',8,TEXT,anchor='ne',max_width=88,max_height=21)
         summary = s.summary() if s else {}
         c.create_line(25,343,339,343,fill=LINE)
-        self.text(34,355,'当前会话平均',10,bold=True,max_width=183,max_height=25)
+        self.text(34,355,'当前会话平均',10,bold=True,max_width=120,max_height=25)
+        total_tokens = summary.get('total_usage_tokens')
+        total_m = f'{total_tokens / 1_000_000:.4f}M' if total_tokens is not None else '—'
+        self.text(188,357,f'总消耗 {total_m}',8,BLUE,anchor='center',max_width=100,max_height=21)
         self.text(328,357,f"{summary.get('completed',0)} 次完成",9,MUTED,anchor='ne',
                   max_width=100,max_height=21)
         labels = [('首 token',fmt(summary.get('avg_ttft'))),('整轮耗时',fmt(summary.get('avg_duration'))),
@@ -358,7 +446,8 @@ class Pulse:
         sx,sy,_,_,x,y = self.drag
         self.drag = None
         if abs(event.x_root-sx)+abs(event.y_root-sy)>5: return
-        if self.collapsed or (308<=x<=344 and 60<=y<=96): self.toggle()
+        if not self.collapsed and 272<=x<308 and 60<=y<=96: self.minimize_to_tray()
+        elif self.collapsed or (308<=x<=344 and 60<=y<=96): self.toggle()
         elif 240<=x<=336 and 433<=y<=466: self.show_history()
 
     def toggle(self):
@@ -373,8 +462,10 @@ class Pulse:
             self.current()
         except queue.Empty: pass
         self.frame += 1
-        self.draw()
-        if self.history and self.history.winfo_exists(): self.update_history()
+        if not self.hidden_to_tray:
+            self.draw()
+        if self.history and self.history.winfo_exists() and not self.history_hidden_to_tray:
+            self.update_history()
         self.root.after(500,self.tick)
 
     def save_settings(self):
@@ -472,6 +563,7 @@ class Pulse:
             '输出 token：日志报告的 output_tokens，可能包含推理及工具调用 token。推理 token 是其中的子集，不会重复相加。\n\n'
             '进行中实时平均 tok/s = 日志中当前输出 token 数 ÷ 当前已用时间，每 500ms 更新显示，收到新的用量日志时更新 token 数。完成后显示最终整轮平均。它不是纯流式生成速度；本地日志缺少逐 token 到达时间。\n\n'
             '会话平均耗时为算术平均；平均 tok/s 为完成请求的总输出 token ÷ 总耗时。中断和未完成请求不计入平均。\n\n'
+            '会话总消耗 = 各轮输入 token + 输出 token，以 1,000,000 token 为 1M；缓存输入属于输入 token 的一部分，不会重复计算。日志缺少输入 token 时会低估。\n\n'
             '自动跟随按最近用户请求活动选择会话，无法获知 Codex 当前前台标签页。右键可固定会话。\n\n'
             f'数据源：{self.args.home}\n指标保存在：{DATA}\n仅读取日志，不发送网络请求。',parent=self.root)
 
@@ -543,9 +635,18 @@ class Pulse:
         self.close()
 
     def close(self):
+        if self.closing:
+            return
+        self.closing = True
         self.stop.set()
-        self.save_settings()
-        self.root.destroy()
+        try:
+            self.save_settings()
+        finally:
+            try:
+                if self.tray is not None:
+                    self.tray.stop()
+            finally:
+                self.root.destroy()
 
 
 def main():
